@@ -10,20 +10,20 @@ import vgamepad as vg
 # --------------------------------------------------------------------------------
 
 # 鼠标移动转换为手柄摇杆的倍率（灵敏度）
-# 数值越大，鼠标轻微移动时手柄摇杆的反应幅度就越大
-MOUSE_SENSITIVITY_X = 50
+MOUSE_SENSITIVITY_X = 250
 
 # 鼠标上下移动转换为手柄扳机键的倍率（灵敏度）
-# 数值越大，鼠标轻微移动时手柄扳机的按下深度就越大
-# 数值为0时关闭扳机转换功能
-MOUSE_SENSITIVITY_TRIGGER = 1
+MOUSE_SENSITIVITY_TRIGGER = 10
 
-# 【新增】定义一个用于将摇杆和扳机复位的按键
-# 按下此键后，所有累加的鼠标输入将被清零，手柄会回中
-RESET_KEY = keyboard.Key.f8
+# 将摇杆和扳机复位的按键
+RESET_KEY = keyboard.Key.f1
+
+# 定义按住时可将扳机完全按下的按键
+# 设置为 None 可禁用该功能
+FULL_LT_KEY = 'q'  # 按住 'q' 键可将左扳机(LT)踩到底
+FULL_RT_KEY = 'e'  # 按住 'e' 键可将右扳机(RT)踩到底
 
 # 键盘按键映射
-# 格式为: '键盘按键': vg.XUSB_BUTTON.手柄按键
 KEY_MAPPINGS = {
     'w': vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
     's': vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
@@ -56,10 +56,13 @@ mouse_x, mouse_y = 0, 0
 last_x, last_y = 0, 0
 mouse_lock = threading.Lock()
 
-# 【新增】用于累加鼠标输入的变量
+# 用于累加鼠标输入的变量
 current_joystick_x = 0
-# 将左右扳机统一为一个轴，正值为右扳机，负值为左扳机
 current_trigger_axis = 0
+
+# 用于追踪扳机快捷键是否被按下的状态
+lt_key_pressed = False
+rt_key_pressed = False
 
 # --------------------------------------------------------------------------------
 # 核心功能函数
@@ -77,33 +80,49 @@ def on_move(x, y):
 
 def on_press(key):
     """当键盘按键按下时，由pynput监听器调用的回调函数"""
-    global current_joystick_x, current_trigger_axis
-
-    # 【修改】检查是否按下了复位键
-    if key == RESET_KEY:
-        with mouse_lock:
-            current_joystick_x = 0
-            current_trigger_axis = 0
-        print("--- 输入已复位 ---")
-        return # 复位后，不执行下面的按键映射逻辑
+    global current_joystick_x, current_trigger_axis, lt_key_pressed, rt_key_pressed
 
     try:
         key_to_check = key.char.lower()
     except AttributeError:
         key_to_check = key
 
-    if key_to_check in KEY_MAPPINGS:
+    # 检查是否按下了复位键
+    if key_to_check == RESET_KEY:
+        with mouse_lock:
+            current_joystick_x = 0
+            current_trigger_axis = 0
+        print("--- 输入已复位 ---")
+        return
+
+    # 检查是否按下了扳机快捷键
+    if FULL_LT_KEY and key_to_check == FULL_LT_KEY:
+        lt_key_pressed = True
+    elif FULL_RT_KEY and key_to_check == FULL_RT_KEY:
+        rt_key_pressed = True
+    
+    # 处理常规按键映射
+    elif key_to_check in KEY_MAPPINGS:
         gamepad.press_button(button=KEY_MAPPINGS[key_to_check])
         gamepad.update()
 
 def on_release(key):
     """当键盘按键释放时，由pynput监听器调用的回调函数"""
+    global lt_key_pressed, rt_key_pressed
+    
     try:
         key_to_check = key.char.lower()
     except AttributeError:
         key_to_check = key
 
-    if key_to_check in KEY_MAPPINGS:
+    # 检查是否释放了扳机快捷键
+    if FULL_LT_KEY and key_to_check == FULL_LT_KEY:
+        lt_key_pressed = False
+    elif FULL_RT_KEY and key_to_check == FULL_RT_KEY:
+        rt_key_pressed = False
+        
+    # 处理常规按键映射
+    elif key_to_check in KEY_MAPPINGS:
         gamepad.release_button(button=KEY_MAPPINGS[key_to_check])
         gamepad.update()
 
@@ -129,38 +148,35 @@ def main_loop():
         with mouse_lock:
             delta_x = mouse_x - last_x
             delta_y = mouse_y - last_y
-            
             last_x, last_y = mouse_x, mouse_y
 
-            # --- 【修改】累加鼠标移动量 ---
-            
-            # 累加X轴移动
+            # 累加鼠标移动量
             current_joystick_x += int(delta_x * MOUSE_SENSITIVITY_X)
             current_joystick_x = clamp(current_joystick_x, -32768, 32767)
 
-            # 累加Y轴移动到扳机轴
-            # 向上移动(delta_y < 0)会增加轴的值，向下移动(delta_y > 0)会减少轴的值
             current_trigger_axis -= int(delta_y * MOUSE_SENSITIVITY_TRIGGER)
             current_trigger_axis = clamp(current_trigger_axis, -255, 255)
 
-        # --- 根据累加值更新手柄状态 ---
+        # --- 根据累加值和按键状态更新手柄 ---
         
         # 更新左摇杆X轴
         gamepad.left_joystick(x_value=current_joystick_x, y_value=0)
         
-        # 根据扳机轴的值来决定哪个扳机被按下
+        # 首先根据鼠标的累积值计算扳机
+        lt_from_mouse = 0
+        rt_from_mouse = 0
         if current_trigger_axis > 0:
-            # 轴为正，按下右扳机，左扳机为0
-            gamepad.right_trigger(value=current_trigger_axis)
-            gamepad.left_trigger(value=0)
+            rt_from_mouse = current_trigger_axis
         elif current_trigger_axis < 0:
-            # 轴为负，按下左扳机（取绝对值），右扳机为0
-            gamepad.left_trigger(value=abs(current_trigger_axis))
-            gamepad.right_trigger(value=0)
-        else:
-            # 轴为0，两个扳机都为0
-            gamepad.right_trigger(value=0)
-            gamepad.left_trigger(value=0)
+            lt_from_mouse = abs(current_trigger_axis)
+        
+        # 【修改】检查快捷键是否覆盖扳机值
+        # 如果lt_key_pressed为True，则final_lt_value为255，否则为鼠标计算的值
+        final_lt_value = 255 if lt_key_pressed else lt_from_mouse
+        final_rt_value = 255 if rt_key_pressed else rt_from_mouse
+
+        gamepad.left_trigger(value=final_lt_value)
+        gamepad.right_trigger(value=final_rt_value)
 
         # 发送所有更新到虚拟手柄
         gamepad.update()
@@ -171,9 +187,12 @@ def main_loop():
 # 脚本入口
 # --------------------------------------------------------------------------------
 if __name__ == "__main__":
-    print("开始运行鼠标转手柄脚本 (输入保持模式)...")
-    print("移动鼠标会累加手柄输入，输入状态在复位前将一直保持。")
-    print(f"【重要】请按 <{str(RESET_KEY).split('.')[-1]}> 键将摇杆和扳机复位到中心。")
+    print("开始运行鼠标转手柄脚本 (输入保持/快捷扳机模式)...")
+    print(f"按 <{str(RESET_KEY).split('.')[-1]}> 键将摇杆和扳机复位。")
+    if FULL_LT_KEY:
+        print(f"按住 <{FULL_LT_KEY}> 键可将左扳机(LT)完全按下。")
+    if FULL_RT_KEY:
+        print(f"按住 <{FULL_RT_KEY}> 键可将右扳机(RT)完全按下。")
     print("按 Ctrl+C 停止脚本。")
 
     start_listeners()
