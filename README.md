@@ -7,8 +7,8 @@ A tool that allows you to map mouse movements to xbox360 mouse stick movements f
 4.运行mouse_to_gamepad.py启动脚本
 PS.Win+R打开运行，运行joy.cpl可查看效果
 
-Install Python
-Run install.cmd to install the base runtime libraries.
-Run config.py to adjust the settings
-Run mouse_to_gamepad.py to start the script
+1.Install Python
+2.Run install.cmd to install the base runtime libraries.
+3.Run config.py to adjust the settings
+4.Run mouse_to_gamepad.py to start the script
 PS.Win+R open run, run joy.cpl can view the effect
